@@ -14,12 +14,14 @@ groq_client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
 
 # Connect to your local ChromaDB
 db_client = chromadb.PersistentClient(path="./shl_chroma_db")
-sentence_transformer_ef = embedding_functions.SentenceTransformerEmbeddingFunction(
-    model_name="all-MiniLM-L6-v2"
+# Use the Hugging Face API to do the heavy lifting remotely!
+hf_ef = embedding_functions.HuggingFaceEmbeddingFunction(
+    api_key=os.environ.get("HUGGINGFACE_API_KEY"),
+    model_name="sentence-transformers/all-MiniLM-L6-v2"
 )
 collection = db_client.get_collection(
     name="shl_assessments",
-    embedding_function=sentence_transformer_ef
+    embedding_function=hf_ef
 )
 
 # --- 2. Define Strict API Schemas ---
