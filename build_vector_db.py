@@ -1,6 +1,10 @@
+import os
 import json
 import chromadb
 from chromadb.utils import embedding_functions
+from dotenv import load_dotenv
+
+load_dotenv()
 
 def build_chroma_db():
     print("Loading data from shl_catalog_scraped.json...")
@@ -10,15 +14,16 @@ def build_chroma_db():
     # Initialize ChromaDB with a persistent directory on your local machine
     client = chromadb.PersistentClient(path="./shl_chroma_db")
     
-    # Explicitly use the model you suggested
-    sentence_transformer_ef = embedding_functions.SentenceTransformerEmbeddingFunction(
-        model_name="all-MiniLM-L6-v2"
+    # Replacing the old sentence_transformer_ef with this:
+    hf_ef = embedding_functions.HuggingFaceEmbeddingFunction(
+        api_key=os.environ.get("HUGGINGFACE_API_KEY"),
+        model_name="sentence-transformers/all-MiniLM-L6-v2"
     )
 
-    # Create or get the collection
+    # Create or get the collection using the new HF function
     collection = client.get_or_create_collection(
         name="shl_assessments",
-        embedding_function=sentence_transformer_ef
+        embedding_function=hf_ef
     )
 
     documents = []
