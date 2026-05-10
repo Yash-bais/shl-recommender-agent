@@ -53,13 +53,12 @@ async def health_check():
     return {"status": "ok"}
 
 @app.post("/chat", response_model=ChatResponse)
-async def chat_endpoint(request: Request):
-    # 1. Safely extract the conversation history from the incoming request
-    data = await request.json()
-    conversation = data.get("messages", [])
+async def chat_endpoint(request: ChatRequest): # plugged in Pydantic model!
+    # 1. Convert the Pydantic objects into the dictionary list our code expects
+    conversation = [{"role": msg.role, "content": msg.content} for msg in request.messages]
     
     # Format the conversation for the intent extractor
-    convo_transcript = "\n".join([f"{msg.get('role', 'user')}: {msg.get('content', '')}" for msg in conversation])
+    convo_transcript = "\n".join([f"{msg['role']}: {msg['content']}" for msg in conversation])
 
     # ==========================================
     # AGENT PASS 1: Search Query Generation
