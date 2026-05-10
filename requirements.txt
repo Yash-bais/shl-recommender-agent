@@ -2,6 +2,5 @@ fastapi
 uvicorn
 groq
 chromadb
-sentence-transformers
 pydantic
 python-dotenv
