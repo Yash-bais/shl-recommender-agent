@@ -1,7 +1,7 @@
 import os
 import json
 from typing import List, Dict, Any
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Request
 from pydantic import BaseModel
 import chromadb
 from chromadb.utils import embedding_functions
@@ -9,19 +9,19 @@ from groq import Groq
 from dotenv import load_dotenv
 
 load_dotenv()
+
 # --- 1. Initialize Clients & DB ---
 groq_client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
 
 # Connect to your local ChromaDB
 db_client = chromadb.PersistentClient(path="./shl_chroma_db")
-# Use the Hugging Face API to do the heavy lifting remotely!
-hf_ef = embedding_functions.HuggingFaceEmbeddingFunction(
-    api_key=os.environ.get("HUGGINGFACE_API_KEY"),
-    model_name="sentence-transformers/all-MiniLM-L6-v2"
-)
+
+# Use the Default ONNX Embedding Function (No PyTorch, No API keys, ultra-lightweight!)
+onnx_ef = embedding_functions.DefaultEmbeddingFunction()
+
 collection = db_client.get_collection(
     name="shl_assessments",
-    embedding_function=hf_ef
+    embedding_function=onnx_ef
 )
 
 # --- 2. Define Strict API Schemas ---
@@ -53,23 +53,17 @@ async def health_check():
     return {"status": "ok"}
 
 @app.post("/chat", response_model=ChatResponse)
-async def chat_endpoint(request: ChatRequest):
-    messages = request.messages
-    if not messages:
-        raise HTTPException(status_code=400, detail="Conversation history is empty.")
-
-    # Convert Pydantic messages to dicts for Groq
-    conversation = [{"role": m.role, "content": m.content} for m in messages]
-    latest_user_message = conversation[-1]["content"]
+async def chat_endpoint(request: Request):
+    # 1. Safely extract the conversation history from the incoming request
+    data = await request.json()
+    conversation = data.get("messages", [])
     
-    
-    # Convert conversation to a full text transcript for Pass 1 to read
-    convo_transcript = "\n".join([f"{m['role']}: {m['content']}" for m in conversation])
+    # Format the conversation for the intent extractor
+    convo_transcript = "\n".join([f"{msg.get('role', 'user')}: {msg.get('content', '')}" for msg in conversation])
 
     # ==========================================
     # AGENT PASS 1: Search Query Generation
     # ==========================================
-    # We now pass the ENTIRE conversation so it remembers previous requirements!
     query_prompt = f"""
     You are an AI routing assistant. Read the entire conversation history below.
     Extract ALL active technical skills, job titles, roles, and behavioral requirements into a single, space-separated search string (e.g., "mid-level java spring sql personality stakeholders").
@@ -88,47 +82,48 @@ async def chat_endpoint(request: ChatRequest):
     )
     
     search_intent = query_response.choices[0].message.content.strip()
-    
+    print(f"Agent Pass 1 Extracted Intent: {search_intent}")
+
     # ==========================================
-    # RETRIEVAL (ChromaDB)
+    # RETRIEVAL (ChromaDB ONNX Search)
     # ==========================================
     retrieved_context = "No catalog data retrieved yet."
+    
     if search_intent != "NONE" and search_intent != "":
-        # We increased n_results from 5 to 15 to ensure we don't miss secondary skills like SQL or Spring
-        results = collection.query(query_texts=[search_intent], n_results=15)
+        results = collection.query(query_texts=[search_intent], n_results=10)
         
         if results['ids'][0]:
             context_parts = []
             for i in range(len(results['ids'][0])):
                 meta = results['metadatas'][0][i]
-                # We relaxed the distance filter to 1.0 to let more diverse tests through.
-                # The Llama 70B model in Pass 2 will filter out the irrelevant ones.
-                if results['distances'][0][i] < 1.0: 
-                    context_parts.append(
-                        f"Name: {meta['name']} | URL: {meta['url']} | Type: {meta['test_type']}"
-                    )
+                doc = results['documents'][0][i]
+                
+                # Bundle the metadata and the actual description text together!
+                context_parts.append(
+                    f"Name: {meta['name']} | URL: {meta['url']} | Type: {meta['test_type']}\nDetails: {doc}\n---"
+                )
             if context_parts:
                 retrieved_context = "\n".join(context_parts)
                 
-                
+    print(f"Database retrieved {len(retrieved_context)} characters of context.")
+
     # ==========================================
     # AGENT PASS 2: Final Response Generation
     # ==========================================
-    # We use JSON mode to guarantee the output matches the SHL schema perfectly.
     system_prompt = f"""
     You are an expert SHL assessment recommender acting as a consultative partner to hiring managers.
     
-    CORE BEHAVIORS (Mimic these strictly):
-    1. Clarify First: If a request is broad (e.g., "hiring a developer", "contact center staff"), DO NOT recommend immediately. Ask 1-2 targeted questions about seniority, specific daily tasks, or required languages/accents.
-    2. Missing Catalog Items: If the user asks for a skill (like 'Rust') that is not in the Retrieved Context, state clearly that it is not in the catalog. Recommend the closest proxy assessments (like general programming or live coding).
-    3. Compare & Defend: If asked the difference between two tests, use the Retrieved Context to explain exactly why one fits better (e.g., industry-specific vs general, personality vs knowledge). Explain your reasoning for why you included a test.
-    4. Refuse Legal/Compliance Advice: If asked if a test satisfies laws like HIPAA, explicitly state you cannot give legal advice and tell them to consult their legal team.
-    5. Maintain State: If the user modifies requirements ("drop OPQ", "add Docker"), update the recommendations list without starting over.
+    CORE BEHAVIORS (EXECUTE IN THIS EXACT ORDER):
+    1. CHECK INVENTORY FIRST: Compare the user's requested skills against the Retrieved Catalog Context. If a specific language, tool, or skill (e.g., Rust, Solidity, Web3) is MISSING from the context, you MUST immediately state that it is not available in our catalog BEFORE asking any clarifying questions. Suggest the closest available alternatives.
+    2. CLARIFY BROAD REQUESTS: If the requested skills ARE in the catalog, but the request is vague, ask 1-2 targeted questions about seniority or daily tasks.
+    3. COMPARE & DEFEND: Explain exactly why you included a test based on the context.
+    4. REFUSE LEGAL ADVICE: If asked about compliance/laws, explicitly state you cannot give legal advice and direct them to their legal team.
+    5. MAINTAIN STATE: If the user modifies requirements, update the recommendations.
     
     STRICT RULES:
     - ONLY recommend items present in the 'Retrieved Catalog Context' below. Never invent test names or URLs.
-    - If clarifying, refusing, or if you don't have enough info yet, the "recommendations" array MUST be empty [].
-    - Set "end_of_conversation" to true ONLY when the user explicitly confirms the final list (e.g., "Perfect", "Confirmed", "Lock it in").
+    - If clarifying, refusing, or suggesting alternatives for missing items, the "recommendations" array MUST be empty [].
+    - Set "end_of_conversation" to true ONLY when the user explicitly confirms the final list.
 
     OUTPUT FORMAT:
     You MUST respond in valid JSON matching this schema:
@@ -142,17 +137,17 @@ async def chat_endpoint(request: ChatRequest):
     {retrieved_context}
     """
 
-    # Inject our system prompt at the start of the conversation history
+    # Bundle the system prompt with the user's actual chat history
     full_prompt = [{"role": "system", "content": system_prompt}] + conversation
 
     final_response = groq_client.chat.completions.create(
         messages=full_prompt,
-        model="llama-3.3-70b-versatile", # Larger model for strict reasoning and JSON compliance
+        model="llama-3.3-70b-versatile",
         temperature=0.1,
-        response_format={"type": "json_object"} # Forces valid JSON output
+        response_format={"type": "json_object"} 
     )
 
-    # Parse the LLM output and return it via FastAPI
+    # Parse the LLM output and return it
     raw_json = final_response.choices[0].message.content
     parsed_response = json.loads(raw_json)
     
