@@ -11,6 +11,7 @@ def scrape_shl_catalog():
     }
 
     # --- PHASE 1: Scrape Listings ---
+    
     assessments = []
     start_index = 0
     print("=== Phase 1: Scraping Listing Pages ===")

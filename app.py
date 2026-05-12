@@ -16,7 +16,8 @@ groq_client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
 # Connect to your local ChromaDB
 db_client = chromadb.PersistentClient(path="./shl_chroma_db")
 
-# Use the Default ONNX Embedding Function (No PyTorch, No API keys, ultra-lightweight!)
+# Using the Default ONNX Embedding Function as sentence transformer used too much memory and huggingface API keys were a hassle for this demo and it was literally not laoding on my machine maybe because high demand on the embedding endpoint, who knows. 
+# (No PyTorch, No API keys, ultra-lightweight!)
 onnx_ef = embedding_functions.DefaultEmbeddingFunction()
 
 collection = db_client.get_collection(
@@ -24,7 +25,7 @@ collection = db_client.get_collection(
     embedding_function=onnx_ef
 )
 
-# --- 2. Define Strict API Schemas ---
+# --- 2. Defining Strict API Schemas ---
 class Message(BaseModel):
     role: str
     content: str
@@ -54,7 +55,7 @@ async def health_check():
 
 @app.post("/chat", response_model=ChatResponse)
 async def chat_endpoint(request: ChatRequest): # plugged in Pydantic model!
-    # 1. Convert the Pydantic objects into the dictionary list our code expects
+    # 1. Convert the Pydantic objects into the dictionary list because that's what our code expects
     conversation = [{"role": msg.role, "content": msg.content} for msg in request.messages]
     
     # Format the conversation for the intent extractor
@@ -97,7 +98,7 @@ async def chat_endpoint(request: ChatRequest): # plugged in Pydantic model!
                 meta = results['metadatas'][0][i]
                 doc = results['documents'][0][i]
                 
-                # Bundle the metadata and the actual description text together!
+                # Grouping the metadata and the actual description text together!
                 context_parts.append(
                     f"Name: {meta['name']} | URL: {meta['url']} | Type: {meta['test_type']}\nDetails: {doc}\n---"
                 )
@@ -136,7 +137,7 @@ async def chat_endpoint(request: ChatRequest): # plugged in Pydantic model!
     {retrieved_context}
     """
 
-    # Bundle the system prompt with the user's actual chat history
+    # Collecing the system prompt with the user's actual chat history
     full_prompt = [{"role": "system", "content": system_prompt}] + conversation
 
     final_response = groq_client.chat.completions.create(

@@ -6,7 +6,7 @@ def build_chroma_db():
     # 1. Initialize Chroma normally
     client = chromadb.PersistentClient(path="./shl_chroma_db")
     
-    # 2. Use the Default ONNX Embedding Function (No PyTorch, No API keys, ultra-lightweight!)
+    # 2. Using the Default ONNX Embedding Function 
     onnx_ef = embedding_functions.DefaultEmbeddingFunction()
 
     collection = client.get_or_create_collection(

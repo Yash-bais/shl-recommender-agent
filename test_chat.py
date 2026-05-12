@@ -3,7 +3,7 @@ import json
 import sys
 
 def run_chat_simulation():
-    # The URL where your FastAPI server is running
+    # The URL where FastAPI server is running
     api_url = "http://127.0.0.1:8000/chat"
     
     # This array acts as the stateless conversation history
@@ -29,7 +29,7 @@ def run_chat_simulation():
         payload = {"messages": messages}
         try:
             response = requests.post(api_url, json=payload)
-            response.raise_for_status() # Check for HTTP errors (e.g., 500)
+            response.raise_for_status() # Check for HTTP errors
             data = response.json()
         except requests.exceptions.ConnectionError:
             print("\n❌ Error: Could not connect to the server. Is app.py running (uvicorn app:app)?")
